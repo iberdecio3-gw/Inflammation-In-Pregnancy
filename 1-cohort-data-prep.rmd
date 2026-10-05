@@ -1,0 +1,1296 @@
+---
+title: 'inflammation in Preg: Aim 1'
+author: "Isa Berdecio"
+date: "2026-05-21"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+#*************************************************************
+# PROJECT: Inflammation in Pregnancy
+# SCRIPT:  Healthy Cohort Generation 
+# AIM:     Generate normative reference cohort for Aim 1
+# STATUS:  Complete
+# Date Last Updated: 07/09/2026
+#*************************************************************
+
+library(tidyverse)
+library(lubridate)
+library(naniar)
+library(haven)
+library(readxl)
+library(moments)
+library(tableone) 
+library(purrr)
+library(stringr)
+
+
+
+
+```
+
+```{r}
+#****************************************************************************
+# 1. HELPER FUNCTIONS
+#****************************************************************************
+
+#Date cleaning (carried over from ReMAPP — handles Excel serials, bad years)
+clean_date <- function(x, min_year = 2019) {
+  if (is.numeric(x)) return(as.Date(x, origin = "1899-12-30"))
+  x_chr <- stringr::str_trim(as.character(x))
+  x_chr[x_chr == ""] <- NA_character_
+  x_chr <- stringr::str_replace(x_chr,
+                                "^7(0[0-9]{2}-[0-9]{2}-[0-9]{2})$", "2//1")
+  parsed <- suppressWarnings(lubridate::parse_date_time(
+    x_chr,
+    orders = c("Ymd","Y-m-d","Y.m.d","mdY","m/d/Y","m.d.Y",
+               "dmY","d/m/Y","d.m.Y","Ymd HMS","mdy HMS","dmy HMS"),
+    exact = FALSE, tz = "UTC"
+  ))
+  need_num <- is.na(parsed) & !is.na(x_chr) &
+    stringr::str_detect(x_chr, "^[0-9]{5}$")
+  if (any(need_num, na.rm = TRUE)) {
+    parsed[need_num] <- as.POSIXct(
+      as.Date(as.numeric(x_chr[need_num]), origin = "1899-12-30"), tz = "UTC")
+  }
+  d <- as.Date(parsed)
+  d[!is.na(d) & lubridate::year(d) < min_year] <- as.Date(NA)
+  return(d)
+}
+
+#First non-missing value helper
+first_non_na <- function(x) {
+  i <- which(!is.na(x))[1]
+  if (is.na(i)) NA_real_ else x[i]
+}
+
+```
+
+```{r}
+#****************************************************************************
+# 2. LOAD AND MERGE DATA - carried from RMP1
+#****************************************************************************
+#Mixture of cleaned datasets and raw data
+
+filepath <- "Z:/Isa_working_files/"
+
+mnh04 <- read.csv("Z:/Isa_working_files/mnh04_merged.csv")
+mnh06 <- read.csv("Z:/Isa_working_files/mnh06_merged.csv") #SYS/DIA bp
+mnh08 <- read.csv("Z:/Isa_working_files/mnh08_merged.csv") 
+mnh09 <- read.csv("Z:/Isa_working_files/mnh09_merged.csv")
+mat_enroll <- read.csv("Z:/Isa_working_files/MAT_ENROLL.csv")
+mat_demographic <- read.csv("Z:/Isa_working_files/MAT_DEMOGRAPHIC.csv")
+gwg_outcome_long <- read_dta("Z:/Isa_working_files/MAT_GWG.dta")
+mat_nutr_long <- read_dta("Z:/Isa_working_files/MAT_NUTR.dta")
+mat_prevpreg_complications <- read_dta("Z:/Isa_working_files/MAT_PREVPREG_COMPLICATIONS.dta")
+mat_infections <- read.csv("Z:/Isa_working_files/MAT_INFECTION.csv")
+mat_gdm <- read_dta("Z:/Isa_working_files/MAT_GDM.dta")
+
+#rename all to lowercase (optional)
+mat_enroll <- mat_enroll %>% rename_with(tolower)
+mat_demographic <- mat_demographic %>% rename_with(tolower)
+gwg_outcome_long <- gwg_outcome_long %>% rename_with(tolower)
+mat_nutr_long <- mat_nutr_long %>% rename_with(tolower)
+mat_prevpreg_complications <- mat_prevpreg_complications %>% rename_with(tolower)
+mat_infections <- mat_infections %>% rename_with(tolower)
+mat_gdm <- mat_gdm %>% rename_with(tolower)
+mnh04 <- mnh04 %>% rename_with(tolower)
+mnh06 <- mnh06 %>% rename_with(tolower)
+mnh08 <- mnh08 %>% rename_with(tolower)
+mnh09 <- mnh09 %>% rename_with(tolower)
+
+
+#remove duplicates from raw data
+mnh04 <- mnh04 %>% distinct(momid, pregid, .keep_all = TRUE)
+mnh06 <- mnh06 %>% distinct(momid, pregid, .keep_all = TRUE)
+mnh08 <- mnh08 %>% distinct(momid, pregid, .keep_all = TRUE)
+mnh09 <- mnh09 %>% distinct(momid, pregid, .keep_all = TRUE)
+
+
+#select variables of interest
+mat_enroll_small <- mat_enroll %>%
+  select(momid, pregid, site, preg_start_date)
+
+mat_demographic_small <- mat_demographic %>%
+  select(momid, pregid, mat_age, ga_wks_enroll, bmi_enroll, muac_enroll,
+height_group, singleton, smoke, chew_tobacco, chew_betelnut, drink, height_group)
+
+#mat_nutr_small <- mat_nutr_long %>%
+ # select(momid, pregid, ferritin_lborres)
+
+mat_prevpreg_small <- mat_prevpreg_complications %>%
+  select(momid, pregid, mat_prevpreg_lbw, mat_prevpreg_ces_unplan, mat_prevpreg_gdm)
+
+mat_infections_small <- mat_infections %>%
+  select(momid, pregid, hiv_positive_ever_preg, mal_rdt_positive_enroll, 
+         hbv_positive_ever_preg, hcv_positive_ever_preg)
+
+mat_gdm_small <- mat_gdm %>%
+  select(momid, pregid, diab_gest_any)
+
+mnh04_small <- mnh04 %>%
+  select(momid, pregid, m04_cancer_ever_mhoccur,
+      m04_cardiac_ever_mhoccur,
+      m04_kidney_ever_mhoccur, m04_stillbirth_rporres, m04_ph_oth_rporres, m04_ph_prev_rporres)
+
+mnh06_small <- mnh06 %>%
+  select(momid, pregid, 
+         m06_bp_sys_vsorres_1:m06_bp_sys_vsorres_3,
+         m06_bp_dia_vsorres_1:m06_bp_dia_vsorres_3)
+
+mnh08_small <- mnh08 %>%
+  select(momid, pregid, m08_lbstdat,
+         m08_crp_lborres, m08_cbc_wbc_lborres, m08_cbc_plate_lborres,
+         m08_agp_lborres, m08_cbc_neu_fcc_lborres,
+         m08_cbc_lymph_fcc_lborres, m08_cbc_mono_fcc_lborres, m08_ferritin_lborres, m08_lbstdat)
+
+missing_codes <- c(-5, -6, -7, -9)
+
+mnh08_small <- mnh08_small %>%
+  mutate(
+    across(
+      c(
+        m08_ferritin_lborres,
+        m08_crp_lborres,
+        m08_agp_lborres,
+        m08_cbc_wbc_lborres,
+        m08_cbc_plate_lborres,
+        m08_cbc_neu_fcc_lborres,
+        m08_cbc_lymph_fcc_lborres,
+        m08_cbc_mono_fcc_lborres
+      ))
+    ) %>%
+  # drop moms with no usable lab data at all
+  dplyr::filter(
+    if_any(
+      c(m08_ferritin_lborres, m08_crp_lborres, m08_agp_lborres),
+      ~ !is.na(.)
+      )
+  )
+
+missing_codes <- c(-5, -6, -7, -9)
+
+mnh08_small <- mnh08_small %>%
+  mutate(
+    across(
+      c(
+        m08_ferritin_lborres,
+        m08_crp_lborres,
+        m08_agp_lborres,
+        m08_cbc_wbc_lborres,
+        m08_cbc_plate_lborres,
+        m08_cbc_neu_fcc_lborres,
+        m08_cbc_lymph_fcc_lborres,
+        m08_cbc_mono_fcc_lborres
+      ),
+      ~ replace(.x, .x %in% missing_codes, NA)
+    )
+  ) %>%
+  filter(
+    if_any(
+      c(m08_ferritin_lborres, m08_crp_lborres, m08_agp_lborres),
+      ~ !is.na(.x)
+    )
+  )
+
+
+mnh09_small <- mnh09 %>%
+  select(momid, pregid, m09_fever_ceoccur, m09_infect_mhoccur_1, 
+      m09_infect_mhoccur_2 ,
+      m09_infect_mhoccur_3 ,
+      m09_infect_mhoccur_4 ,
+      m09_infect_mhoccur_5 ,
+      m09_infect_mhoccur_6 ,
+      m09_infect_mhoccur_7 ,
+      m09_infect_mhoccur_8 ,
+      m09_infect_mhoccur_9, m09_infect_mhoccur_10)
+
+
+#left join for to assess for eligibility
+total_cohort <- mat_enroll_small %>%
+  left_join(mat_demographic_small, by = c("momid","pregid")) %>%
+  #left_join(gwg_small, by = c("momid","pregid", ")) %>%
+  #left_join(mat_nutr_small, by = c("momid","pregid")) %>%
+  left_join(mat_prevpreg_small, by = c("momid","pregid")) %>%
+  left_join(mat_infections_small, by = c("momid","pregid")) %>%
+  left_join(mat_gdm_small, by = c("momid","pregid")) %>%
+  left_join(mnh04_small, by = c("momid","pregid")) %>%
+  left_join(mnh06_small, by = c("momid","pregid")) %>%
+  left_join(mnh08_small, by = c("momid","pregid")) %>%
+  left_join(mnh09_small, by = c("momid","pregid"))
+
+
+
+
+```
+
+
+
+```{r}
+#****************************************************************************
+# 3. FERRITIN UNIT CORRECTION
+#****************************************************************************
+
+total_cohort <- total_cohort %>%
+  group_by(site) %>%
+  mutate(
+    p50_ferritin = median(m08_ferritin_lborres, na.rm = TRUE),
+    ferritin_lborres = case_when(
+      site == "Kenya" & p50_ferritin < 15 ~ m08_ferritin_lborres * 10,
+      site != "Kenya" & p50_ferritin < 10 ~ m08_ferritin_lborres * 10,
+      TRUE ~ m08_ferritin_lborres
+    )
+  ) %>%
+  ungroup()
+
+#check
+total_cohort %>%
+  group_by(site) %>%
+  summarise(
+    original_median = median(m08_ferritin_lborres, na.rm = TRUE),
+    corrected_median = median(ferritin_lborres, na.rm = TRUE),
+    changed_n = sum(m08_ferritin_lborres != ferritin_lborres, na.rm = TRUE)
+  )
+
+
+```
+
+```{r}
+criteria <- c(
+  "crit_bmi_muac",
+  "crit_singlepreg",
+  "crit_smoke",
+  "crit_drink",
+  "crit_chronic",
+  "crit_hiv",
+  "crit_bp",
+  "crit_malaria",
+  "crit_hepatitisb",
+  "crit_hepatitisc",
+  "crit_infection",
+  "crit_gdm"
+)
+
+labels <- c(
+  "BMI 18.5–30 & MUAC >23 cm",
+  "Singleton pregnancy",
+  "No smoking/tobacco/betel nut",
+  "No alcohol",
+  "No chronic disease",
+  "HIV negative",
+  "Blood pressure <140/90",
+  "No malaria",
+  "HBV negative",
+  "HCV negative",
+  "No infection history",
+  "No gestational diabetes"
+)
+
+remaining <- prep_criteria
+
+flow_table <- tibble(
+  Step = "Starting cohort",
+  Criterion = "Participants with biomarker data",
+  Excluded = NA_integer_,
+  Remaining = nrow(remaining)
+)
+
+for(i in seq_along(criteria)){
+
+  before <- nrow(remaining)
+
+  remaining <- remaining %>%
+    filter(.data[[criteria[i]]] == 1 |
+             (criteria[i] == "crit_drink" & .data[[criteria[i]]] == 666))
+
+  after <- nrow(remaining)
+
+  flow_table <- bind_rows(
+    flow_table,
+    tibble(
+      Step = paste0(i),
+      Criterion = labels[i],
+      Excluded = before - after,
+      Remaining = after
+    )
+  )
+}
+
+flow_table
+```
+
+
+```{r}
+#****************************************************************************
+# 4. DEFINE HEALTHY COHORT  critERIA + TOTAL COHORT DF
+#****************************************************************************
+
+prep_criteria <- total_cohort %>%
+  mutate(
+    # 1. BMI 18.5–30 AND MUAC >23
+     crit_bmi_muac = case_when(
+      bmi_enroll >= 18.5 & bmi_enroll <= 30 & muac_enroll > 23 ~ 1,
+      bmi_enroll < 18.5 | bmi_enroll > 30 | muac_enroll <= 23 ~ 0,
+      TRUE ~ 55
+    ),
+
+    # 2. Singleton pregnancy
+     crit_singlepreg = case_when(
+      singleton == 1 ~ 1,
+      singleton == 0 ~ 0,
+      TRUE ~ 55
+    ),
+
+    # 3. No smoking / tobacco / betelnut
+     crit_smoke = case_when(
+      smoke == 0 & chew_tobacco == 0 & chew_betelnut == 0 ~ 1,
+      smoke == 1 | chew_tobacco == 1 | chew_betelnut == 1 ~ 0,
+      TRUE ~ 55
+    ),
+
+    # 4. No alcohol
+     crit_drink = case_when(
+      site == "Pakistan" ~ 666,
+      drink == 0 ~ 1,
+      drink == 1 ~ 0,
+      TRUE ~ 55
+    ),
+
+    # 5. No infection history
+     crit_infection = case_when(
+      m09_fever_ceoccur == 0 &
+      m09_infect_mhoccur_1 == 0 &
+      m09_infect_mhoccur_2 == 0 &
+      m09_infect_mhoccur_3 == 0 &
+      m09_infect_mhoccur_4 == 0 &
+      m09_infect_mhoccur_5 == 0 &
+      m09_infect_mhoccur_6 == 0 &
+      m09_infect_mhoccur_7 == 0 &
+      m09_infect_mhoccur_8 == 0 &
+      m09_infect_mhoccur_9 == 0 &
+      m09_infect_mhoccur_10 == 0 ~ 1,
+
+      m09_fever_ceoccur == 1 |
+      m09_infect_mhoccur_1 == 1 |
+      m09_infect_mhoccur_2 == 1 |
+      m09_infect_mhoccur_3 == 1 |
+      m09_infect_mhoccur_4 == 1 |
+      m09_infect_mhoccur_5 == 1 |
+      m09_infect_mhoccur_6 == 1 |
+      m09_infect_mhoccur_7 == 1 |
+      m09_infect_mhoccur_8 == 1 |
+      m09_infect_mhoccur_9 == 1 |
+      m09_infect_mhoccur_10 == 1 ~ 0,
+
+      TRUE ~ 55
+    ),
+
+    # 6. No chronic disease
+     crit_chronic = case_when(
+      m04_cancer_ever_mhoccur == 0 &
+      m04_cardiac_ever_mhoccur == 0 &
+      m04_kidney_ever_mhoccur == 0 ~ 1,
+
+      m04_cancer_ever_mhoccur == 1 |
+      m04_cardiac_ever_mhoccur == 1 |
+      m04_kidney_ever_mhoccur == 1 ~ 0,
+      
+      m04_cancer_ever_mhoccur == 99 | #Unknown history ineligible
+      m04_cardiac_ever_mhoccur == 99 |
+      m04_kidney_ever_mhoccur == 99 ~ 0,
+      TRUE ~ 55
+    ),
+
+    # 7. No GDM
+     crit_gdm = case_when(
+      diab_gest_any == 0 ~ 1,
+      diab_gest_any == 1 ~ 0,
+      TRUE ~ 55
+    ),
+
+    # 8. No HIV
+     crit_hiv = case_when(
+      hiv_positive_ever_preg == 0 ~ 1,
+      hiv_positive_ever_preg == 1 ~ 0,
+      TRUE ~ 55
+    ),
+
+    # 9. No malaria
+     crit_malaria = case_when(
+      mal_rdt_positive_enroll == 0 | site %in% c("India-CMC", "India-SAS", "Pakistan") ~ 1,
+      mal_rdt_positive_enroll == 1 ~ 0,
+      TRUE ~ 55
+    ),
+
+    # 10. No Hepatitis B
+     crit_hepatitisb = case_when(
+      hbv_positive_ever_preg == 0 ~ 1,
+      hbv_positive_ever_preg == 1 ~ 0,
+      TRUE ~ 55
+    ),
+
+    # 11. No Hepatitis C
+     crit_hepatitisc = case_when(
+      hcv_positive_ever_preg == 0 ~ 1,
+      hcv_positive_ever_preg == 1 ~ 0,
+      TRUE ~ 55
+    )
+  )
+
+#variables created from raw data ----------------
+
+ #12.Blood pressure: SBP <140, DBP <9
+prep_criteria <- prep_criteria %>%
+  rowwise() %>%
+  mutate(
+    m06_bp_sys_avg = mean(
+      c(m06_bp_sys_vsorres_1,
+        m06_bp_sys_vsorres_2,
+        m06_bp_sys_vsorres_3),
+      na.rm = TRUE
+    ),
+
+    m06_bp_dia_avg = mean(
+      c(m06_bp_dia_vsorres_1,
+        m06_bp_dia_vsorres_2,
+        m06_bp_dia_vsorres_3),
+      na.rm = TRUE
+    ),
+
+     crit_bp = case_when(
+      m06_bp_sys_avg > 0 &
+        m06_bp_sys_avg < 140 &
+        m06_bp_dia_avg > 0 &
+        m06_bp_dia_avg < 90 ~ 1,
+
+      m06_bp_sys_avg >= 140 |
+        m06_bp_dia_avg >= 90 ~ 0,
+
+      TRUE ~ 55
+    )
+  )
+
+missing_codes <- c(-5, -6, -7, -9)
+
+prep_criteria <- prep_criteria %>%
+  mutate(
+    across(
+      c(
+        m06_bp_sys_vsorres_1,
+        m06_bp_sys_vsorres_2,
+        m06_bp_sys_vsorres_3,
+        m06_bp_dia_vsorres_1,
+        m06_bp_dia_vsorres_2,
+        m06_bp_dia_vsorres_3
+      ),
+      ~ if_else(.x %in% missing_codes, NA_real_, as.numeric(.x))
+    )
+  ) %>%
+  rowwise() %>%
+  mutate(
+    m06_bp_sys_avg = mean(
+      c(m06_bp_sys_vsorres_1, m06_bp_sys_vsorres_2, m06_bp_sys_vsorres_3),
+      na.rm = TRUE
+    ),
+    m06_bp_dia_avg = mean(
+      c(m06_bp_dia_vsorres_1, m06_bp_dia_vsorres_2, m06_bp_dia_vsorres_3),
+      na.rm = TRUE
+    ),
+    m06_bp_sys_avg = if_else(is.nan(m06_bp_sys_avg), NA_real_, m06_bp_sys_avg),
+    m06_bp_dia_avg = if_else(is.nan(m06_bp_dia_avg), NA_real_, m06_bp_dia_avg),
+
+    crit_bp = case_when(
+      m06_bp_sys_avg > 0 & m06_bp_sys_avg < 140 &
+        m06_bp_dia_avg > 0 & m06_bp_dia_avg < 90 ~ 1,
+
+      m06_bp_sys_avg >= 140 |
+        m06_bp_dia_avg >= 90 ~ 0,
+
+      TRUE ~ 55
+    )
+  ) %>%
+  ungroup()
+
+
+save(prep_criteria, file = "Z:/Isa_working_files/prep_criteria_5_31.rda")
+
+crit55_by_site <- prep_criteria %>%
+  pivot_longer(
+    cols = starts_with("crit_"),
+    names_to = "crit",
+    values_to = "value"
+  ) %>%
+  filter(value == 55) %>%
+  count(site, crit, name = "n_55") %>%
+  group_by(site) %>%
+  mutate(pct_55_within_site = 100 * n_55 / sum(n_55)) %>%
+  arrange(site, desc(n_55)) %>%
+  ungroup()
+
+
+
+
+
+
+
+
+```
+
+
+```{r}
+criteria <- c(
+  "crit_bmi_muac",
+  "crit_singlepreg",
+  "crit_smoke",
+  "crit_drink",
+  "crit_chronic",
+  "crit_hiv",
+  "crit_bp",
+  "crit_malaria",
+  "crit_hepatitisb",
+  "crit_hepatitisc",
+  "crit_infection",
+  "crit_gdm"
+)
+
+labels <- c(
+  "BMI 18.5–30 & MUAC >23 cm",
+  "Singleton pregnancy",
+  "No smoking/tobacco/betel nut",
+  "No alcohol",
+  "No chronic disease",
+  "HIV negative",
+  "Blood pressure <140/90",
+  "No malaria",
+  "HBV negative",
+  "HCV negative",
+  "No infection history",
+  "No gestational diabetes"
+)
+
+remaining <- prep_criteria
+
+flow_table <- tibble(
+  Step = "Starting cohort",
+  Criterion = "Participants with biomarker data",
+  Excluded = NA_integer_,
+  Remaining = nrow(remaining)
+)
+
+for(i in seq_along(criteria)){
+
+  before <- nrow(remaining)
+
+  remaining <- remaining %>%
+    filter(.data[[criteria[i]]] == 1 |
+             (criteria[i] == "crit_drink" & .data[[criteria[i]]] == 666))
+
+  after <- nrow(remaining)
+
+  flow_table <- bind_rows(
+    flow_table,
+    tibble(
+      Step = paste0(i),
+      Criterion = labels[i],
+      Excluded = before - after,
+      Remaining = after
+    )
+  )
+}
+
+View(flow_table)
+
+gt(flow_table) %>%
+  fmt_missing(
+    columns = Excluded,
+    missing_text = "-"
+  ) %>%
+  cols_label(
+    Step = "Step",
+    Criterion = "Eligibility criterion",
+    Excluded = "Excluded, n",
+    Remaining = "Remaining, n"
+  ) %>%
+  fmt_number(
+    columns = c(Excluded, Remaining),
+    decimals = 0,
+    use_seps = TRUE
+  )
+```
+
+
+```{r}
+#****************************************************************************
+#5. CREATE HEALTHY COHORT DF
+#****************************************************************************
+
+eligibility_outcomes <- prep_criteria %>% 
+  rowwise() %>%
+  mutate(
+    healthy_check = sum(
+      across(starts_with("crit_")) %in% c(1, 0, 666), 
+                        na.rm = TRUE
+  ),
+  
+    healthy_eligible = case_when(
+       crit_bmi_muac == 1 &
+       crit_singlepreg == 1 &
+       crit_smoke == 1 &
+       crit_drink %in% c(1, 666) &
+       crit_chronic == 1 &
+       crit_hiv == 1 &
+       crit_bp == 1 &
+       crit_malaria == 1 &
+       crit_hepatitisb == 1 &
+       crit_hepatitisc == 1 &
+       crit_infection == 1 &
+       crit_gdm == 1 ~ 1,
+      TRUE ~ 0
+    )
+  ) %>%
+  ungroup()
+  
+df_healthy <- eligibility_outcomes %>% 
+  filter(healthy_eligible == 1)
+
+df_non_healthy <- eligibility_outcomes %>% 
+  filter(healthy_eligible == 0)
+
+cat("\n--- HEALTHY COHORT COUNTS ---\n")
+cat("All 12 criteria applied:         ");
+print(sum(eligibility_outcomes$healthy_eligible == 1))
+print(table(eligibility_outcomes$site[eligibility_outcomes$healthy_eligible == 1]))
+
+
+print(table(eligibility_outcomes$site[eligibility_outcomes$healthy_eligible == 0]))
+
+
+eligibility_outcomes <- eligibility_outcomes %>%
+  mutate(healthy_flag = healthy_eligible)
+
+#NON-HEALTHY COHORT 
+no_eligibility_outcomes <- eligibility_outcomes %>%
+  mutate(healthy_flag = healthy_eligible) %>%
+   filter(healthy_flag == 0)
+
+```
+
+```{r}
+
+#****************************************************************************
+# 6. BIOMARKER DATASET — LONG FORMAT (all three timepoints)
+#****************************************************************************
+mnh08_raw <- read.csv("Z:/Isa_working_files/mnh08_merged.csv") %>% rename_with(tolower)
+
+
+df_biomarkers <- mnh08_raw %>%
+  mutate(
+  visit_date = clean_date(m08_lbstdat),
+  m08_crp_lborres = if_else(m08_crp_lborres < 0, NA, m08_crp_lborres),
+  m08_cbc_wbc_lborres = if_else(m08_cbc_wbc_lborres < 0, NA, m08_cbc_wbc_lborres),
+  m08_cbc_plate_lborres = if_else(m08_cbc_plate_lborres < 0, NA, m08_cbc_plate_lborres),
+  m08_agp_lborres = if_else(m08_agp_lborres < 0, NA, m08_agp_lborres)
+  ) %>%
+  select(site, momid, pregid, m08_type_visit, m08_lbstdat, m08_type_visit,
+         m08_crp_lborres, #Provide C-reactive protein (CRP):  mg/L
+         m08_cbc_wbc_lborres, #White Blood Cells (WBC)  [total leukocyte count]. x10³/mm³
+         m08_cbc_plate_lborres, #Platelet results
+         m08_agp_lborres, #Provide Alpha 1-acid glycoprotein (AGP):  g/L
+         m08_cbc_neu_fcc_lborres, #Neutrophils (full cell count) x10³/mm³
+         m08_cbc_lymph_fcc_lborres, #Lymphocyte (full cell count) x10³/mm³
+         m08_cbc_mono_fcc_lborres, #Monocyte (full cell count) x10³/mm³
+  ) %>%
+ filter(
+   if_any(
+     c(m08_crp_lborres, #Provide C-reactive protein (CRP):  mg/L
+         m08_cbc_wbc_lborres, #White Blood Cells (WBC)  [total leukocyte count]. x10³/mm³
+         m08_cbc_plate_lborres, #Platelet results
+         m08_agp_lborres, #Provide Alpha 1-acid glycoprotein (AGP):  g/L
+         m08_cbc_neu_fcc_lborres, #Neutrophils (full cell count) x10³/mm³
+         m08_cbc_lymph_fcc_lborres, #Lymphocyte (full cell count) x10³/mm³
+         m08_cbc_mono_fcc_lborres, #Monocyte (full cell count) x10³/mm³
+ ), ~!is.na(.))
+ ) %>%
+#removing duplicates by date
+group_by(site, momid, pregid, m08_lbstdat) %>%
+  mutate(n=n()) %>%
+  filter(n == 1,
+    m08_type_visit %in% c(1:5, 13))
+
+#long biomarker dataset
+df_biomarkers_long <- eligibility_outcomes %>%
+  select(site, momid, pregid, preg_start_date , healthy_eligible, healthy_check, healthy_eligible) %>%
+  left_join(df_biomarkers, by = c("site","momid", "pregid")) %>%
+  mutate(
+    preg_start_date = lubridate::ymd(preg_start_date)
+  ) %>%
+  mutate(
+    visit_date = lubridate::ymd(m08_lbstdat),
+    ga_wks  = as.numeric(visit_date - preg_start_date) / 7,
+    ga_days = as.numeric(visit_date - preg_start_date),
+    trimester = case_when(
+      ga_wks > 0 & ga_wks < 14 ~ 1,
+      ga_wks >= 14 & ga_wks < 28 ~ 2,
+      ga_wks >= 28 & ga_wks <= 45 ~ 3,
+      TRUE ~ NA_real_
+    ),
+    #cbc derived ratios
+    nlr = m08_cbc_neu_fcc_lborres / m08_cbc_lymph_fcc_lborres,
+    lmr = m08_cbc_lymph_fcc_lborres / m08_cbc_mono_fcc_lborres,
+    plr = m08_cbc_plate_lborres   / m08_cbc_lymph_fcc_lborres,
+    sii = (m08_cbc_neu_fcc_lborres * m08_cbc_plate_lborres) /  
+           m08_cbc_lymph_fcc_lborres) %>%
+  rename(
+    crp = m08_crp_lborres,
+    wbc = m08_cbc_wbc_lborres,
+    plt = m08_cbc_plate_lborres,
+    agp = m08_agp_lborres
+  )
+
+
+#biomarker wide data set
+df_bio_wide_all <- df_biomarkers_long %>%
+  group_by(site, momid, pregid) %>%
+  summarise(
+    preg_start_date = first(preg_start_date),
+    healthy_eligible = first(healthy_eligible),
+    healthy_check = first(healthy_check),
+
+    bio_n = sum(!is.na(crp) | !is.na(wbc) | !is.na(plt) | !is.na(agp)),
+
+    bio_list = {
+      x <- tibble(
+        visit_date, ga_wks,
+        crp, wbc, plt, agp, nlr, lmr, plr, sii
+      ) %>%
+        filter(!is.na(crp) | !is.na(wbc) | !is.na(plt) | !is.na(agp)) %>%
+        arrange(visit_date)
+
+      if (nrow(x) == 0) "No biomarkers" else
+        paste0(
+          format(x$visit_date, "%Y-%m-%d"),
+          " (", sprintf("%.1f", x$ga_wks), "w): ",
+          "CRP=", sprintf("%.2f", x$crp), ", ",
+          "WBC=", sprintf("%.2f", x$wbc), ", ",
+          "PLT=", sprintf("%.0f", x$plt), ", ",
+          "AGP=", sprintf("%.2f", x$agp), ", ",
+          "NLR=", sprintf("%.2f", x$nlr), ", ",
+          "LMR=", sprintf("%.2f", x$lmr), ", ",
+          "PLR=", sprintf("%.2f", x$plr), ", ",
+          "SII=", sprintf("%.0f", x$sii),
+          collapse = "; "
+        )
+    },
+    .groups = "drop"
+  )
+
+
+df_bio_long_hc   <- df_biomarkers_long  %>% filter(healthy_eligible == 1)
+df_bio_wide_hc   <- df_bio_wide_all  %>% filter(healthy_eligible == 1)
+
+#NON HEALTHY BIOMARKER DF
+df_bio_long_nh   <- df_biomarkers_long  %>% filter(healthy_eligible == 0)
+
+#remove outliers
+df_biomarkers_long <- df_biomarkers_long %>%
+  filter(is.na(ga_wks) | between(ga_wks, 5, 41)) %>%
+  filter(is.na(crp) | between(crp, 0, 200)) %>%
+  filter(is.na(agp) | between(agp, 0, 3)) %>%
+  filter(is.na(wbc) | between(wbc, 1, 50)) %>%
+  filter(is.na(plt) | between(plt, 20, 1000))
+
+df_bio_wide_all <- df_biomarkers_long %>%
+  group_by(site, momid, pregid) %>%
+  summarise(
+    preg_start_date       = first(preg_start_date),
+    healthy_eligible      = first(healthy_eligible),
+    healthy_check         = first(healthy_check),
+
+    # number of biomarker measurements
+    bio_n = sum(
+      !is.na(crp) | !is.na(wbc) | !is.na(plt) | !is.na(agp)
+    ),
+
+    # readable list of all biomarker values
+    bio_list = {
+      x <- tibble(
+        visit_date = visit_date,
+        ga_wks     = ga_wks,
+        crp, wbc, plt, agp,
+        nlr, lmr, plr, sii
+      ) %>%
+        filter(
+          !is.na(crp) | !is.na(wbc) | !is.na(plt) | !is.na(agp)
+        ) %>%
+        arrange(visit_date)
+
+      if (nrow(x) == 0) {
+        "No biomarkers"
+      } else {
+        paste0(
+          format(x$visit_date, "%Y-%m-%d"),
+          " (", sprintf("%.1f", x$ga_wks), "w): ",
+          "CRP=", sprintf("%.2f", x$crp), ", ",
+          "WBC=", sprintf("%.2f", x$wbc), ", ",
+          "PLT=", sprintf("%.0f", x$plt), ", ",
+          "AGP=", sprintf("%.2f", x$agp), ", ",
+          "NLR=", sprintf("%.2f", x$nlr), ", ",
+          "LMR=", sprintf("%.2f", x$lmr), ", ",
+          "PLR=", sprintf("%.2f", x$plr), ", ",
+          "SII=", sprintf("%.0f", x$sii),
+          collapse = "; "
+        )
+      }
+    },
+    .groups = "drop"
+  )
+
+df_bio_wide_hc   <- df_bio_wide_all  %>% filter(healthy_eligible == 1)
+
+
+
+```
+
+```{r}
+#*****************************************************************************
+#5. SENSITIVITY ANALYSIS DATA ----
+#*****************************************************************************
+#*prepare data
+
+inf_outcomes <- read.csv("Z:/Isa_working_files/INF_OUTCOMES.csv")
+
+inf_outcomes<- inf_outcomes %>%
+  rename_with(tolower)
+
+inf_outcomes_preg <- inf_outcomes %>%
+  group_by(site, momid, pregid) %>%
+  summarise(
+    preterm_any = if_else(all(is.na(pretermbirth_lt37)), NA_real_,
+                          max(pretermbirth_lt37, na.rm = TRUE)),
+    lbw_any = if_else(all(is.na(lbw2500_any)), NA_real_,
+                      max(lbw2500_any, na.rm = TRUE)),
+    sga_any = if_else(all(is.na(sga_centile)), NA_real_,
+                      as.numeric(any(sga_centile < 10, na.rm = TRUE))),
+    infant_death_any = if_else(all(is.na(inf_dth)), NA_real_,
+                               max(inf_dth, na.rm = TRUE)),
+    .groups = "drop"
+  )
+
+df_sensitivityanalysis_long <- df_biomarkers_long %>%
+  left_join(
+    inf_outcomes_preg,
+    by = c("site", "momid", "pregid")
+  )
+
+#save data
+save(df_sensitivityanalysis_long, file = "Z:/Isa_working_files/df_sensitive_long.rda")
+
+
+```
+
+```{r}
+#*****************************************************************************
+#6. FINAL ELIGIBILITY DATAFRAMES----
+#*****************************************************************************
+## Define c1 to c20----
+df_eli <- prep_criteria %>%
+  dplyr::select(momid, pregid, site, starts_with("crit_")) %>%
+  mutate(
+    C1 = ifelse(!is.na(crit_bmi_muac), crit_bmi_muac,55),
+    C2 = ifelse(!is.na(crit_singlepreg), crit_singlepreg,55), 
+    C3 = ifelse(!is.na(crit_smoke), crit_smoke,55), 
+    C4 = case_when(
+       crit_drink == 1| crit_drink == 0 ~ crit_drink,
+       crit_drink == 666 ~ 1,
+      TRUE~55), 
+    C5 = ifelse(!is.na( crit_chronic), crit_chronic,55),
+    C6 = ifelse(!is.na( crit_hiv), crit_hiv,55), 
+    C7 = ifelse(!is.na( crit_bp), crit_bp,55), 
+    C8 = ifelse(!is.na( crit_malaria), crit_malaria,55), 
+    C9 = ifelse(!is.na( crit_hepatitisb), crit_hepatitisb,55),
+    C10 = ifelse(!is.na( crit_hepatitisc), crit_hepatitisc,55),
+    C11 = ifelse(!is.na( crit_infection), crit_infection,55),
+    C12 = ifelse(!is.na( crit_gdm), crit_gdm,55),
+  ) %>% 
+  mutate(across(matches("C\\d+"),
+                function(x) 
+                  factor(x, 
+                         levels = c(1,0,55),
+                         labels = c("Eligible", "Ineligible", "Pending")
+                  )))
+
+# df_eli_wide <- df_eli
+# save(df_eli_wide, file = "derived_data/df_eli_wide.rda")
+# library(openxlsx)
+# write.xlsx(df_eli_wide, file = "derived_data/df_eli_wide.xlsx", overwrite = TRUE)
+
+#make a long dataset
+df_eli_long <- df_eli %>% 
+  dplyr::select(-starts_with("crit_")) %>% 
+  pivot_longer(cols = -c(momid, pregid, site), 
+               names_to = "Variable", 
+               values_to = "Value")
+
+#order variable value
+df_eli_long$Variable <- factor(
+  df_eli_long$Variable,
+  levels = c("C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11", "C12"))
+
+save(df_eli_long, file = "Z:/Isa_working_files/df_eli_long.rda")
+
+# test <- df_hb_long1_all %>% filter (SITE == "Kenya")
+# table (test$EXPECTED_TYPE_VISIT)
+
+#*****************************************************************************
+#7. Demographic Table Prep----
+#*************************************************s****************************
+
+inf_outcomes <- inf_outcomes[order(inf_outcomes$momid, inf_outcomes$pregid, inf_outcomes$site), ]
+
+inf_perinatal_df <- inf_outcomes[!duplicated(inf_outcomes$pregid), ]
+  
+inf_perinatal_df <- inf_perinatal_df %>% 
+    select(momid, pregid, site, livebirth, pretermbirth_lt37, lbw2500_any, bweight_any, sga_centile, sex, inf_dth)
+  
+inf_perinatal_df[inf_perinatal_df == -5] <- NA
+
+inf_perinatal_df[inf_perinatal_df == -7] <- NA
+
+save(inf_perinatal_df, file = "Z:/Isa_working_files/inf_perinatal_df.rda")
+
+
+save(mat_demographic, file = "Z:/Isa_working_files/mat_demographic.rda")
+```
+
+```{r}
+
+#OUTCOME CHECKS
+
+eligibility_outcomes_ironinc <- prep_criteria %>%
+  rowwise() %>%
+  mutate(
+    healthy_eligible = case_when(
+       crit_age == 1 &
+       crit_ga == 1 &
+       crit_bmi_muac == 1 &
+       crit_height == 1 &
+       crit_singlepreg == 1 &
+       crit_lbw == 1 &
+       crit_stillbirth == 1 &
+       crit_unpl_cesarian == 1 &
+       crit_smoke == 1 &
+       crit_drink %in% c(1, 666) &
+       crit_chronic == 1 &
+       crit_hiv == 1 &
+       crit_bp == 1 &
+       crit_malaria == 1 &
+       crit_hepatitisb == 1 &
+       crit_hepatitisc == 1 &
+       crit_infection == 1 &
+       crit_iron == 1 &
+       crit_gdm == 1 ~ 1,
+      TRUE ~ 0
+    ),
+
+    healthy_eligible_ga = case_when(
+       crit_age == 1 &
+       crit_bmi_muac == 1 &
+       crit_height == 1 &
+       crit_singlepreg == 1 &
+       crit_lbw == 1 &
+       crit_stillbirth == 1 &
+       crit_unpl_cesarian == 1 &
+       crit_smoke == 1 &
+       crit_drink %in% c(1, 666) &
+       crit_chronic == 1 &
+       crit_hiv == 1 &
+       crit_bp == 1 &
+       crit_malaria == 1 &
+       crit_hepatitisb == 1 &
+       crit_hepatitisc == 1 &
+       crit_infection == 1 &
+      crit_iron == 1 &
+       crit_gdm == 1 ~ 1,
+      TRUE ~ 0
+    )
+  ) %>%
+  ungroup()
+
+### below is code for a by site exclusion check
+ghana <- prep_criteria %>% filter(site == "Ghana")
+
+ criteria <- c(
+  "crit_age","crit_ga","crit_bmi_muac","crit_height",
+  "crit_singlepreg","crit_lbw","crit_stillbirth",
+  "crit_unpl_cesarian","crit_smoke","crit_drink",
+  "crit_infection","crit_chronic","crit_gdm",
+  "crit_hiv","crit_malaria","crit_hepatitisb",
+  "crit_hepatitisc","crit_bp", "crit_iron"
+)
+
+remaining <- ghana
+
+for (c in  criteria) {
+  before <- nrow(remaining)
+  remaining <- remaining %>% filter(.data[[c]] == 1)
+  after <- nrow(remaining)
+
+  cat(c, ": removed", before - after,
+      "remaining", after, "\n")
+}
+
+prep_criteria %>%
+  filter(site == "Ghana") %>%
+  count(crit_iron, useNA = "ifany")
+
+eligibility_outcomes_ironinc %>%
+  group_by(site) %>%
+  summarise(
+    n = sum(!is.na(m08_ferritin_lborres)),
+    mean = mean(m08_ferritin_lborres, na.rm = TRUE),
+    sd = sd(m08_ferritin_lborres, na.rm = TRUE),
+    median = median(m08_ferritin_lborres, na.rm = TRUE),
+    p25 = quantile(m08_ferritin_lborres, 0.25, na.rm = TRUE),
+    p75 = quantile(m08_ferritin_lborres, 0.75, na.rm = TRUE),
+    min = min(m08_ferritin_lborres, na.rm = TRUE),
+    max = max(m08_ferritin_lborres, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+fmt_np <- function(x) {
+  n <- sum(x == 1, na.rm = TRUE)
+  d <- sum(!is.na(x))
+  pct <- ifelse(d == 0, NA_real_, n / d * 100)
+  paste0(n, " (", round(pct, 1), ")")
+}
+
+make_total_table <- function(data, label) {
+  tibble(
+    Measure = c(
+      "Participants assessed for eligibility, N",
+      "Eligible for healthy cohort (all criteria applied), n (%)",
+      "Eligible for healthy cohort (GA criterion not applied), n (%)"
+    ),
+    Definition = label,
+    Value = c(
+      as.character(nrow(data)),
+      fmt_np(data$healthy_eligible),
+      fmt_np(data$healthy_eligible_ga)
+    )
+  )
+}
+
+iron_compare <- bind_rows(
+  make_total_table(eligibility_outcomes, "Without iron criterion"),
+  make_total_table(eligibility_outcomes_ironinc, "With iron criterion")
+) %>%
+  pivot_wider(
+    names_from = Definition,
+    values_from = Value
+  )
+
+iron_compare
+
+
+make_site_table <- function(data, label) {
+
+  site_summary <- data %>%
+    group_by(site) %>%
+    summarise(
+      `Participants assessed for eligibility, N` = as.character(n()),
+      `Eligible for healthy cohort (all criteria applied), n (%)` =
+        fmt_np(healthy_eligible),
+      .groups = "drop"
+    )
+
+  total_summary <- data %>%
+    summarise(
+      site = "Total",
+      `Participants assessed for eligibility, N` = as.character(n()),
+      `Eligible for healthy cohort (all criteria applied), n (%)` =
+        fmt_np(healthy_eligible),
+      `Eligible for healthy cohort (GA criterion not applied), n (%)` =
+        fmt_np(healthy_eligible_ga)
+    )
+
+  bind_rows(site_summary, total_summary) %>%
+    pivot_longer(
+      -site,
+      names_to = "Measure",
+      values_to = "Value"
+    ) %>%
+    mutate(Definition = label)
+}
+
+iron_compare_site <- bind_rows(
+  make_site_table(eligibility_outcomes, "Without iron"),
+  make_site_table(eligibility_outcomes_ironinc, "With iron")
+) %>%
+  pivot_wider(
+    names_from = c(Definition, site),
+    values_from = Value
+  )
+
+
+
+  tibble(
+    Measure = c(
+      "Participants assessed for eligibility, N",
+      "Eligible for healthy cohort (all criteria applied), n (%)",
+      "Eligible for healthy cohort (GA criterion not applied), n (%)"
+    ),
+
+    Value = c(
+      as.character(nrow(eligibility_outcomes)),
+      fmt_np(eligibility_outcomes$healthy_eligible),
+      fmt_np(eligibility_outcomes$healthy_eligible_ga)
+    )
+  )
+iron_compare_site
+
+iron_compare <- bind_rows(
+
+  eligibility_outcomes %>%
+    group_by(site) %>%
+    summarise(
+      value = fmt_np(healthy_eligible),
+      .groups = "drop"
+    ) %>%
+    mutate(definition = "Without iron"),
+
+  eligibility_outcomes_ironinc %>%
+    group_by(site) %>%
+    summarise(
+      value = fmt_np(healthy_eligible),
+      .groups = "drop"
+    ) %>%
+    mutate(definition = "With iron")
+
+) %>%
+  pivot_wider(
+    names_from = definition,
+    values_from = value
+  )
+
+
+
+iron_compare <- bind_rows(
+
+  eligibility_outcomes %>%
+    group_by(site) %>%
+    summarise(
+      value = fmt_np(healthy_eligible),
+      .groups = "drop"
+    ) %>%
+    mutate(definition = "Without iron"),
+
+  eligibility_outcomes %>%
+    summarise(
+      site = "Total",
+      value = fmt_np(healthy_eligible)
+    ) %>%
+    mutate(definition = "Without iron"),
+
+  eligibility_outcomes_ironinc %>%
+    group_by(site) %>%
+    summarise(
+      value = fmt_np(healthy_eligible),
+      .groups = "drop"
+    ) %>%
+    mutate(definition = "With iron"),
+
+  eligibility_outcomes_ironinc %>%
+    summarise(
+      site = "Total",
+      value = fmt_np(healthy_eligible)
+    ) %>%
+    mutate(definition = "With iron")
+
+) %>%
+  pivot_wider(
+    names_from = definition,
+    values_from = value
+  )
+
+iron_compare
+
+
+ga_compare <- bind_rows(
+
+  eligibility_outcomes %>%
+    group_by(site) %>%
+    summarise(
+      value = fmt_np(healthy_eligible),
+      .groups = "drop"
+    ) %>%
+    mutate(definition = "With GA criteria"),
+
+  eligibility_outcomes %>%
+    summarise(
+      site = "Total",
+      value = fmt_np(healthy_eligible)
+    ) %>%
+    mutate(definition = "With GA criteria"),
+
+  eligibility_outcomes %>%
+    group_by(site) %>%
+    summarise(
+      value = fmt_np(healthy_eligible_ga),
+      .groups = "drop"
+    ) %>%
+    mutate(definition = "Without GA criteria"),
+
+  eligibility_outcomes %>%
+    summarise(
+      site = "Total",
+      value = fmt_np(healthy_eligible_ga)
+    ) %>%
+    mutate(definition = "Without GA criteria")
+
+) %>%
+  pivot_wider(
+    names_from = definition,
+    values_from = value
+  )
+
+
+
+
+
+
+total_cohort %>%
+  group_by(site) %>%
+  summarise(
+    n = sum(!is.na(m08_ferritin_lborres)),
+    mean = mean(m08_ferritin_lborres, na.rm = TRUE),
+    sd = sd(m08_ferritin_lborres, na.rm = TRUE),
+    median = median(m08_ferritin_lborres, na.rm = TRUE),
+    p25 = quantile(m08_ferritin_lborres, 0.25, na.rm = TRUE),
+    p75 = quantile(m08_ferritin_lborres, 0.75, na.rm = TRUE),
+    p5 = quantile(m08_ferritin_lborres, 0.05, na.rm = TRUE),
+    p95 = quantile(m08_ferritin_lborres, 0.95, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+
+library(ggplot2)
+
+ggplot(
+  total_cohort %>% filter(!is.na(m08_ferritin_lborres)),
+  aes(x = m08_ferritin_lborres)
+) +
+  geom_histogram(bins = 30) +
+  facet_wrap(~site, scales = "free_y") +
+  theme_bw()
+
+
+ggplot(
+  total_cohort %>% filter(!is.na(m08_ferritin_lborres)),
+  aes(x = m08_ferritin_lborres, y = site)
+) +
+  geom_boxplot() +
+  theme_bw() +
+  coord_flip()
+
+```
+
