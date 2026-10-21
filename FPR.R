@@ -6,7 +6,7 @@ library(gamlss.dist)
 library(MASS)
 library(patchwork)
 
-# Example variables -- replace/add your actual CBC-derived ratios
+
 markers <- c(
   "agp",
   "nlr",
@@ -17,6 +17,7 @@ markers <- c(
 
 missing_codes <- c(-5, -6, -7, -9)
 
+#pull in biomarker dataset, search + code for missing
 df_bio_long_hc <- df_bio_long_hc %>%
   mutate(
     across(
@@ -31,6 +32,7 @@ df_bio_long_hc <- df_bio_long_hc %>%
     )
   )
 
+#calculate cbc derived ratios
 df_bio_long_hc <- df_bio_long_hc %>%
   mutate(
     nlr = m08_cbc_neu_fcc_lborres /
@@ -47,9 +49,7 @@ df_bio_long_hc <- df_bio_long_hc %>%
       m08_cbc_lymph_fcc_lborres
   )
 
-
-
-#assign Inf values as non-usuable (denominator 0)
+#assign inf values as non-usuable (denominator 0)
 df_bio_long_hc <- df_bio_long_hc %>%
   mutate(
     nlr_analysis = if_else(is.finite(nlr) & nlr > 0, nlr, NA_real_),
@@ -59,7 +59,7 @@ df_bio_long_hc <- df_bio_long_hc %>%
   )
 
 #------------------------------------------------------------
-# Basic distribution summary
+# Distribution summary
 #------------------------------------------------------------
 
 distribution_summary <- function(data, variable) {
@@ -193,7 +193,11 @@ normality_results <- bind_rows(
 write.csv(normality_results, "WS_normality_Secondary.csv")
 
 
-###### ----- Test Different Distributions - AGP ----- #####
+###### ----- Test Different Distributions (Inverse Gaussian, Gamma, Log-Normal, Weibull, Box-Cox Transformation) ----- #####
+# The following code
+# 1) Creates a biomaker + FPR specific biomarker dataset 
+#
+#
 
 #**************************************************************
 # AGP - EXCLUDE 128 mg/L OUTLIER
@@ -263,7 +267,6 @@ nrow(df_fpr_agp)
 #)
 
 ###### ----- Test Different Distributions - NLR ----- #####
-
 
 df_fpr_nlr <- df_bio_long_hc %>%
   dplyr::select(
