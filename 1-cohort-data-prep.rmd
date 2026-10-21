@@ -35,6 +35,7 @@ library(stringr)
 #****************************************************************************
 
 #Date cleaning (carried over from ReMAPP — handles Excel serials, bad years)
+
 clean_date <- function(x, min_year = 2019) {
   if (is.numeric(x)) return(as.Date(x, origin = "1899-12-30"))
   x_chr <- stringr::str_trim(as.character(x))
@@ -526,12 +527,6 @@ crit55_by_site <- prep_criteria %>%
   mutate(pct_55_within_site = 100 * n_55 / sum(n_55)) %>%
   arrange(site, desc(n_55)) %>%
   ungroup()
-
-
-
-
-
-
 
 
 ```
